@@ -1,0 +1,7 @@
+{
+    "name": "io.github.vd",
+    "description": "Verify downloads",
+    "path": "<INSERT_PATH_HERE>",
+    "type": "stdio",
+    "allowed_extensions": [ "vd@vd.io" ]
+}
