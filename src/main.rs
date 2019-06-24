@@ -239,7 +239,7 @@ fn respond_error(e: &Error) -> Result<(), Error> {
 }
 
 fn respond_result(result: &str) -> Result<(), Error> {
-	respond_to_extension(&format!(r#"{{"verdict": "{}"}}"#, result), &mut io::stdout())
+	respond_to_extension(&format!(r#"{{"result": "{}"}}"#, result), &mut io::stdout())
 }
 
 fn main() -> Result<(), Error> {
