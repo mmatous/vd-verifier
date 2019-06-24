@@ -130,8 +130,16 @@ fn receive_from_extension<R: std::io::Read>(reader: &mut R) -> Result<String, Er
 	json_to_options(&extension_request)
 }
 
+fn is_version_request(extension_request: &str) -> bool {
+	extension_request == "vd --ping versionRequest"
+}
+
 fn process_incoming_message() -> Result<String, Error> {
 	let extension_request = receive_from_extension(&mut io::stdin())?;
+	if is_version_request(&extension_request) {
+		let r = env!("CARGO_PKG_VERSION");
+		return Ok(s!(r));
+	}
 	let msg = ParsedMessage::from_str(&extension_request)?;
 	let provided_digest = msg.get_digest()?;
 	let digest_kind =
