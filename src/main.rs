@@ -142,8 +142,8 @@ fn process_incoming_message() -> Result<String, Error> {
 	}
 	let msg = ParsedMessage::from_str(&extension_request)?;
 	let provided_digest = msg.get_digest()?;
-	let digest_kind =
-		infer_digest_from_data(&provided_digest).ok_or_else(|| VdError::NoneError(s!("cannot infer digest kind")))?;
+	let digest_kind = infer_digest_from_data(&provided_digest)
+		.ok_or_else(|| VdError::NoneError(s!("cannot infer digest kind")))?;
 	let mut input_file = fs::File::open(msg.input_file)?;
 	let calculated_digest = digest_input(&mut input_file, digest_kind)?;
 	if calculated_digest == provided_digest {
@@ -266,7 +266,10 @@ mod tests {
 		const S: &str = "vd -o orig_name -i /path/to/renamed.f";
 
 		assert_eq!(
-			format!("{}", ParsedMessage::from_str(S).unwrap().get_digest().unwrap_err()),
+			format!(
+				"{}",
+				ParsedMessage::from_str(S).unwrap().get_digest().unwrap_err()
+			),
 			"missing required data: digest file path"
 		);
 	}
@@ -324,7 +327,8 @@ mod tests {
 
 		let p = ParsedMessage::from_str(S).unwrap();
 		assert_eq!(
-			p.search_line("DEADBEEE *processed.file", p!("processed.file")).unwrap(),
+			p.search_line("DEADBEEE *processed.file", p!("processed.file"))
+				.unwrap(),
 			vec! {0xDE, 0xAD, 0xBE, 0xEE}
 		);
 	}
@@ -339,7 +343,10 @@ mod tests {
 
 	#[test]
 	fn infer_digest_from_data_does_not_support_crc() {
-		assert_eq!(infer_digest_from_data(&Vec::from_hex("3054285985").unwrap()), None);
+		assert_eq!(
+			infer_digest_from_data(&Vec::from_hex("3054285985").unwrap()),
+			None
+		);
 	}
 
 	#[test]
