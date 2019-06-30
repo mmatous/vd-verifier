@@ -26,7 +26,6 @@ use md5::{Digest, Md5};
 use serde_json::Value;
 use sha1::Sha1;
 use sha2::{Sha256, Sha512};
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::{fs, io};
@@ -152,6 +151,15 @@ fn process_incoming_message() -> Result<String, Error> {
 	Ok(s!("f"))
 }
 
+fn find_first_hex_string(text: &str) -> Option<Vec<u8>> {
+	let re = regex::Regex::new(r"\b[[:xdigit:]]{32, 128}\b").expect("valid regex");
+	re.captures(text)
+		.map(|captures| {
+			let c = captures.get(0).expect("first capture is always present");
+			hex::decode(c.as_str()).expect("regexed string should be valid hex")
+		} )
+}
+
 #[derive(StructOpt, Debug)]
 #[structopt(
 	name = "vd-verifier",
@@ -198,22 +206,25 @@ impl ParsedMessage {
 			.digest_file
 			.as_ref()
 			.ok_or_else(|| VdError::NoneError(s!("digest file path")))?;
-		let f = fs::File::open(&path)?;
-		self.search_digest_file(f)
+		let mut f = fs::File::open(&path)?;
+		self.search_digest_file(& mut f)
 	}
 
-	fn search_digest_file<R: std::io::Read>(&self, file: R) -> Result<Vec<u8>, Error> {
-		let f = BufReader::new(file);
+	fn search_digest_file<R: std::io::Read>(&self, file: &mut R) -> Result<Vec<u8>, Error> {
+		let mut contents = String::new();
+		file.read_to_string(&mut contents)?;
 		let orig_filename = self
 			.original_filename
 			.as_ref()
 			.ok_or_else(|| VdError::NoneError(s!("original filename")))?;
-		for line in f.lines() {
-			let line = line?;
+		for line in contents.lines() {
 			let result = self.search_line(&line, orig_filename);
 			if result.is_ok() {
 				return result;
 			};
+		}
+		if let Some(digest) = find_first_hex_string(&contents) {
+			return Ok(digest);
 		}
 		Err(VdError::NoneError(s!("digest not present in file")))?
 	}
@@ -224,7 +235,7 @@ impl ParsedMessage {
 			return Err(VdError::NoneError(s!("")))?;
 		}
 		let digest = tokens[0];
-		let filename = tokens[1].trim_matches('*'); // * is possible filename prefix in sha*sums files
+		let filename = tokens[1].trim_matches('*'); // * is possible filename prefix in *sums files
 		if p!(filename).file_name().unwrap() == orig_filename {
 			let decoded = hex::decode(digest)?;
 			return Ok(decoded);
@@ -277,14 +288,14 @@ mod tests {
 	#[test]
 	fn search_file_returns_error_if_digest_passed_in_file_and_no_original_filename() {
 		const S: &str = "vd -i /path/to/renamed.f -d /path/to/digest";
-		let file: &[u8] = b"DEADBEEF *./file";
+		let mut file: &[u8] = b"DEADBEEF *./file";
 
 		assert_eq!(
 			format!(
 				"{}",
 				ParsedMessage::from_str(S)
 					.unwrap()
-					.search_digest_file(file)
+					.search_digest_file(&mut file)
 					.unwrap_err()
 			),
 			"missing required data: original filename"
@@ -294,18 +305,38 @@ mod tests {
 	#[test]
 	fn search_file_returns_error_if_digest_file_does_not_contain_digests() {
 		const S: &str = "vd -o orig_name -i /path/to/renamed.f -d /path/to/digest";
-		let file: &[u8] = b"not_hexdata *./file";
+		let mut file: &[u8] = b"not_hexdata *./file";
 
 		assert_eq!(
 			format!(
 				"{}",
 				ParsedMessage::from_str(S)
 					.unwrap()
-					.search_digest_file(file)
+					.search_digest_file(&mut file)
 					.unwrap_err()
 			),
 			"missing required data: digest not present in file"
 		);
+	}
+
+	#[test]
+	fn find_first_hex_string_returns_first_hex_string() {
+		let text = "sha256 78a2284b43f6eae40f6f495eedb727eca845c4a3bfcd9d8c122ab3ac78ecfb71";
+
+		let hexdata = find_first_hex_string(text);
+		assert_eq!(hexdata.is_some(), true);
+		assert_eq!(
+			hexdata.unwrap(),
+			Vec::from_hex("78a2284b43f6eae40f6f495eedb727eca845c4a3bfcd9d8c122ab3ac78ecfb71").unwrap()
+		);
+	}
+
+	#[test]
+	fn find_first_hex_string_returns_none_if_no_digest_present() {
+		let text = "md5wannabe 78a2284b43f6eae40f6f495e"; // too short
+
+		let hexdata = find_first_hex_string(text);
+		assert_eq!(hexdata.is_none(), true);
 	}
 
 	#[test]
