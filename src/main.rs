@@ -95,17 +95,18 @@ fn calculate<D: Digest + std::io::Write, R: std::io::Read>(input: &mut R) -> Res
 	Ok(hash.to_vec())
 }
 
-fn json_to_options(json: &str) -> Result<String, Error> {
+fn json_to_opt_vec(json: &str) -> Result<Vec<String>, Error> {
 	let v: Value = serde_json::from_str(json)?;
 	let obj = v
 		.as_object()
 		.ok_or_else(|| VdError::NoneError(s!("input is not a valid json object")))?;
-	let mut res: String = s!("vd");
+	let mut opts = vec![String::from_str("vd")?];
 	for key in obj.keys() {
-		let val = &obj[key].to_string();
-		res.push_str(&format!(" --{} {}", key, val.trim_matches('"')));
+		let val = obj[key].to_string().trim_matches('"').to_string();
+		opts.push(format!("--{}", key.to_string()));
+		opts.push(val);
 	}
-	Ok(res)
+	Ok(opts)
 }
 
 fn respond_to_extension<W: std::io::Write>(response: &str, writer: &mut W) -> Result<(), Error> {
@@ -124,13 +125,14 @@ fn read_json_message<R: std::io::Read>(reader: &mut R) -> Result<String, Error> 
 	Ok(String::from_utf8(buffer)?)
 }
 
-fn receive_from_extension<R: std::io::Read>(reader: &mut R) -> Result<String, Error> {
+fn receive_from_extension<R: std::io::Read>(reader: &mut R) -> Result<Vec<String>, Error> {
 	let extension_request = read_json_message(reader)?;
-	json_to_options(&extension_request)
+	json_to_opt_vec(&extension_request)
 }
 
-fn is_version_request(extension_request: &str) -> bool {
-	extension_request == "vd --ping versionRequest"
+fn is_version_request(extension_request: &[String]) -> bool {
+	// todo: not OK, use &str
+	extension_request == ["vd", "--ping", "versionRequest"]
 }
 
 fn process_incoming_message() -> Result<String, Error> {
@@ -139,7 +141,7 @@ fn process_incoming_message() -> Result<String, Error> {
 		let r = env!("CARGO_PKG_VERSION");
 		return Ok(s!(r));
 	}
-	let msg = ParsedMessage::from_str(&extension_request)?;
+	let msg = ParsedMessage::from_iter_safe(&extension_request)?;
 	let provided_digest = msg.get_digest()?;
 	let digest_kind = infer_digest_from_data(&provided_digest)
 		.ok_or_else(|| VdError::NoneError(s!("cannot infer digest kind")))?;
@@ -153,11 +155,10 @@ fn process_incoming_message() -> Result<String, Error> {
 
 fn find_first_hex_string(text: &str) -> Option<Vec<u8>> {
 	let re = regex::Regex::new(r"\b[[:xdigit:]]{32, 128}\b").expect("valid regex");
-	re.captures(text)
-		.map(|captures| {
-			let c = captures.get(0).expect("first capture is always present");
-			hex::decode(c.as_str()).expect("regexed string should be valid hex")
-		} )
+	re.captures(text).map(|captures| {
+		let c = captures.get(0).expect("first capture is always present");
+		hex::decode(c.as_str()).expect("regexed string should be valid hex")
+	})
 }
 
 #[derive(StructOpt, Debug)]
@@ -193,11 +194,6 @@ struct ParsedMessage {
 }
 
 impl ParsedMessage {
-	pub fn from_str(message_string: &str) -> Result<Self, Error> {
-		let m = Self::from_iter_safe(message_string.split(' '))?;
-		Ok(m)
-	}
-
 	pub fn get_digest(&self) -> Result<Vec<u8>, Error> {
 		if let Some(digest) = &self.digest_direct {
 			return Ok(digest.0.clone());
@@ -207,7 +203,7 @@ impl ParsedMessage {
 			.as_ref()
 			.ok_or_else(|| VdError::NoneError(s!("digest file path")))?;
 		let mut f = fs::File::open(&path)?;
-		self.search_digest_file(& mut f)
+		self.search_digest_file(&mut f)
 	}
 
 	fn search_digest_file<R: std::io::Read>(&self, file: &mut R) -> Result<Vec<u8>, Error> {
@@ -218,7 +214,7 @@ impl ParsedMessage {
 			.as_ref()
 			.ok_or_else(|| VdError::NoneError(s!("original filename")))?;
 		for line in contents.lines() {
-			let result = self.search_line(&line, orig_filename);
+			let result = self.search_line(line, orig_filename);
 			if result.is_ok() {
 				return result;
 			};
@@ -245,12 +241,14 @@ impl ParsedMessage {
 }
 
 fn respond_error(e: &Error) -> Result<(), Error> {
-	// {{ in rust format string -> {
-	respond_to_extension(&format!(r#"{{"error": "{}"}}"#, e), &mut io::stdout())
+	// {{ -> { in rust format string
+	let response = format!(r#"{{"error": "{}"}}"#, e);
+	respond_to_extension(&response, &mut io::stdout())
 }
 
 fn respond_result(result: &str) -> Result<(), Error> {
-	respond_to_extension(&format!(r#"{{"result": "{}"}}"#, result), &mut io::stdout())
+	let response = format!(r#"{{"result": "{}"}}"#, result);
+	respond_to_extension(&response, &mut io::stdout())
 }
 
 fn main() -> Result<(), Error> {
@@ -265,21 +263,32 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn get_digest_returns_data_if_digest_specified_directly() {
-		const S: &str = "vd -i /path/to/renamed.f -h DEADBEEF";
+	fn parsed_message_accepts_path_with_spaces() {
+		const S: [&str; 5] = ["vd", "-i", "/path/to/renamed spaced.f", "-h", "DEADBEEF"];
 
-		let p = ParsedMessage::from_str(S).unwrap();
+		let p = ParsedMessage::from_iter_safe(&S).unwrap();
+		assert_eq!(p.input_file, Path::new("/path/to/renamed spaced.f"));
+	}
+
+	#[test]
+	fn get_digest_returns_data_if_digest_specified_directly() {
+		const S: [&str; 5] = ["vd", "-i", "/path/to/renamed.f", "-h", "DEADBEEF"];
+
+		let p = ParsedMessage::from_iter_safe(&S).unwrap();
 		assert_eq!(p.get_digest().unwrap(), vec! {0xDE, 0xAD, 0xBE, 0xEF});
 	}
 
 	#[test]
 	fn get_digest_returns_error_if_message_has_no_digest() {
-		const S: &str = "vd -o orig_name -i /path/to/renamed.f";
+		const S: [&str; 5] = ["vd", "-o", "orig_name", "-i", "/path/to/renamed.f"];
 
 		assert_eq!(
 			format!(
 				"{}",
-				ParsedMessage::from_str(S).unwrap().get_digest().unwrap_err()
+				ParsedMessage::from_iter_safe(&S)
+					.unwrap()
+					.get_digest()
+					.unwrap_err()
 			),
 			"missing required data: digest file path"
 		);
@@ -287,13 +296,13 @@ mod tests {
 
 	#[test]
 	fn search_file_returns_error_if_digest_passed_in_file_and_no_original_filename() {
-		const S: &str = "vd -i /path/to/renamed.f -d /path/to/digest";
+		const S: [&str; 5] = ["vd", "-i", "/path/to/renamed.f", "-d", "/path/to/digest"];
 		let mut file: &[u8] = b"DEADBEEF *./file";
 
 		assert_eq!(
 			format!(
 				"{}",
-				ParsedMessage::from_str(S)
+				ParsedMessage::from_iter_safe(&S)
 					.unwrap()
 					.search_digest_file(&mut file)
 					.unwrap_err()
@@ -304,13 +313,21 @@ mod tests {
 
 	#[test]
 	fn search_file_returns_error_if_digest_file_does_not_contain_digests() {
-		const S: &str = "vd -o orig_name -i /path/to/renamed.f -d /path/to/digest";
+		const S: [&str; 7] = [
+			"vd",
+			"-o",
+			"orig_name",
+			"-i",
+			"/path/to/renamed.f",
+			"-d",
+			"/path/to/digest",
+		];
 		let mut file: &[u8] = b"not_hexdata *./file";
 
 		assert_eq!(
 			format!(
 				"{}",
-				ParsedMessage::from_str(S)
+				ParsedMessage::from_iter_safe(&S)
 					.unwrap()
 					.search_digest_file(&mut file)
 					.unwrap_err()
@@ -354,9 +371,9 @@ mod tests {
 
 	#[test]
 	fn search_line_accepts_shasums_format() {
-		const S: &str = "vd -i /path/to/renamed.f -h DEADBEEF";
+		const S: [&str; 5] = ["vd", "-i", "/path/to/renamed.f", "-h", "DEADBEEF"];
 
-		let p = ParsedMessage::from_str(S).unwrap();
+		let p = ParsedMessage::from_iter_safe(&S).unwrap();
 		assert_eq!(
 			p.search_line("DEADBEEE *processed.file", p!("processed.file"))
 				.unwrap(),
@@ -383,7 +400,7 @@ mod tests {
 	#[test]
 	fn json_to_options_returns_cmdline_like_options() {
 		assert_eq!(
-			json_to_options(
+			json_to_opt_vec(
 				r#"{
 									"original-filename": "orig_name",
 			                        "input-file": "/path/to/renamed.f",
@@ -391,7 +408,15 @@ mod tests {
 			                        }"#
 			)
 			.unwrap(),
-			r#"vd --digest-file /path/to/digest --input-file /path/to/renamed.f --original-filename orig_name"#
+			[
+				"vd",
+				"--digest-file",
+				"/path/to/digest",
+				"--input-file",
+				"/path/to/renamed.f",
+				"--original-filename",
+				"orig_name",
+			]
 		);
 	}
 
