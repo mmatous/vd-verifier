@@ -1,0 +1,22 @@
+language: rust
+rust:
+- stable
+
+os:
+	- linux
+
+matrix:
+  fast_finish: true
+
+before_script:
+- rustup component add clippy
+
+script:
+- cargo build --verbose
+- cargo clippy --all-targets --all-features -- -D warnings
+- cargo test --verbose
+
+cache: cargo
+
+git:
+  depth: 1

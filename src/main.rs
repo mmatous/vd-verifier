@@ -1,81 +1,28 @@
-/*******************************************************************************
-	vd-verifier — a companion application to vd.
-	Copyright © 2019 Martin Matous
-	This program is free software: you can redistribute it and/or modify
-	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation, either version 3 of the License, or
-	(at your option) any later version.
-	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-	GNU General Public License for more details.
-	You should have received a copy of the GNU General Public License
-	along with this program.  If not, see <http://www.gnu.org/licenses/>.
-*/
-
-/******************************************************************************/
-/******************************************************************************/
-
 #[macro_use]
 extern crate failure;
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use failure::Error;
+use failure::{Error, ResultExt};
+use gpgme::{Context, Protocol, VerificationResult};
 use hex::FromHex;
 use md5::{Digest, Md5};
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use sha2::{Sha256, Sha512};
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::{fs, io};
-use structopt::StructOpt;
 
-macro_rules! s {
-	($string_literal: tt) => {
-		$string_literal.to_string()
-	};
-}
+mod vdv;
+use crate::vdv::*;
 
-macro_rules! p {
-	($to_path: expr) => {
-		Path::new($to_path)
-	};
-}
-
-#[derive(Debug, Fail)]
-enum VdError {
-	#[fail(display = "missing required data: {}", _0)]
-	NoneError(String),
-	#[fail(display = "received invalid parameter: {}", _0)]
-	InvalidParam(String),
-}
-
-#[derive(Debug, PartialEq, Clone)]
-struct HexData(Vec<u8>); // cannot accept Vec<_> in structopt otherwise
-impl FromStr for HexData {
-	type Err = hex::FromHexError;
-
-	fn from_str(s: &str) -> Result<Self, Self::Err> {
-		Vec::from_hex(s).map(Self)
-	}
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum DigestKind {
-	Md5,
-	Sha1,
-	Sha256,
-	Sha512,
-}
-
-fn infer_digest_from_data(digest: &[u8]) -> Option<DigestKind> {
-	match digest.len() {
-		16 => Some(DigestKind::Md5),    // 128/8
-		20 => Some(DigestKind::Sha1),   // 160/8
-		32 => Some(DigestKind::Sha256), // 256/8
-		64 => Some(DigestKind::Sha512), // 512/8
-		_ => None,
+fn infer_digest_kind(digest: &[u8]) -> Result<DigestKind, VdError> {
+	let digest_length = digest.len();
+	match digest_length {
+		16 => Ok(DigestKind::Md5),    // 128/8
+		20 => Ok(DigestKind::Sha1),   // 160/8
+		32 => Ok(DigestKind::Sha256), // 256/8
+		64 => Ok(DigestKind::Sha512), // 512/8
+		_ => Err(VdError::InvalidDigestLength { digest_length })?,
 	}
 }
 
@@ -95,253 +42,280 @@ fn calculate<D: Digest + std::io::Write, R: std::io::Read>(input: &mut R) -> Res
 	Ok(hash.to_vec())
 }
 
-fn json_to_opt_vec(json: &str) -> Result<Vec<String>, Error> {
-	let v: Value = serde_json::from_str(json)?;
-	let obj = v
-		.as_object()
-		.ok_or_else(|| VdError::NoneError(s!("input is not a valid json object")))?;
-	let mut opts = vec![String::from_str("vd")?];
-	for key in obj.keys() {
-		let val = obj[key].to_string().trim_matches('"').to_string();
-		opts.push(format!("--{}", key.to_string()));
-		opts.push(val);
-	}
-	Ok(opts)
-}
-
 fn respond_to_extension<W: std::io::Write>(response: &str, writer: &mut W) -> Result<(), Error> {
 	writer.write_i32::<LittleEndian>(response.as_bytes().len() as i32)?;
 	writer.write_all(response.as_bytes())?;
 	Ok(())
 }
 
-fn read_json_message<R: std::io::Read>(reader: &mut R) -> Result<String, Error> {
-	let request_length = reader.read_i32::<LittleEndian>()?;
-	if request_length < 1 {
-		Err(VdError::InvalidParam(s!(request_length)))?;
-	}
-	let mut buffer = vec![0_u8; request_length as usize];
-	reader.read_exact(buffer.as_mut_slice())?; //
+fn read_message<R: std::io::Read>(reader: &mut R) -> Result<String, Error> {
+	let message_length = reader.read_i32::<LittleEndian>()?;
+	ensure!(
+		message_length >= 1,
+		VdError::InvalidParam {
+			param_name: s!("message length")
+		}
+	);
+	let mut buffer = vec![0_u8; message_length as usize];
+	reader
+		.read_exact(buffer.as_mut_slice())
+		.with_context(ctx!("reading message from extension"))?;
 	Ok(String::from_utf8(buffer)?)
 }
 
-fn receive_from_extension<R: std::io::Read>(reader: &mut R) -> Result<Vec<String>, Error> {
-	let extension_request = read_json_message(reader)?;
-	json_to_opt_vec(&extension_request)
-}
-
-fn is_version_request(extension_request: &[String]) -> bool {
-	// todo: not OK, use &str
-	extension_request == ["vd", "--ping", "versionRequest"]
-}
-
-fn process_incoming_message() -> Result<String, Error> {
-	let extension_request = receive_from_extension(&mut io::stdin())?;
-	if is_version_request(&extension_request) {
-		let r = env!("CARGO_PKG_VERSION");
-		return Ok(s!(r));
+fn verify_digest(message: &VdMessage) -> Result<IntegritySummary, Error> {
+	let provided_digest = message.get_digest()?;
+	match provided_digest {
+		Some(provided_digest) => {
+			let digest_kind = infer_digest_kind(&provided_digest)?;
+			let mut input_file =
+				fs::File::open(&message.input_file).with_context(ctx!("opening input file"))?;
+			let calculated_digest = digest_input(&mut input_file, digest_kind)?;
+			if calculated_digest == provided_digest {
+				Ok(IntegritySummary::Pass)
+			} else {
+				Ok(IntegritySummary::Fail)
+			}
+		}
+		None => Err(VdError::MissingContent {
+			file_type: s!("Digest file"),
+			missing_data: s!("corresponding digest"),
+		})?,
 	}
-	let msg = ParsedMessage::from_iter_safe(&extension_request)?;
-	let provided_digest = msg.get_digest()?;
-	let digest_kind = infer_digest_from_data(&provided_digest)
-		.ok_or_else(|| VdError::NoneError(s!("cannot infer digest kind")))?;
-	let mut input_file = fs::File::open(msg.input_file)?;
-	let calculated_digest = digest_input(&mut input_file, digest_kind)?;
-	if calculated_digest == provided_digest {
-		return Ok(s!("i"));
+}
+
+fn interpret_verify_result(result: &VerificationResult) -> Vec<String> {
+	eprintln!("{:?}", result);
+	let mut res = Vec::new();
+	for signature in result.signatures() {
+		let status = match signature.status() {
+			Ok(()) => s!("PASS"),
+			Err(e) => e.description().to_string(),
+		};
+		res.push(status);
 	}
-	Ok(s!("f"))
+	res
 }
 
-fn find_first_hex_string(text: &str) -> Option<Vec<u8>> {
-	let re = regex::Regex::new(r"\b[[:xdigit:]]{32, 128}\b").expect("valid regex");
-	re.captures(text).map(|captures| {
-		let c = captures.get(0).expect("first capture is always present");
-		hex::decode(c.as_str()).expect("regexed string should be valid hex")
-	})
+fn verify_signature(message: &VdMessage) -> Result<Vec<String>, Error> {
+	let mut ctx = Context::from_protocol(Protocol::OpenPgp)?;
+	let sigfile = message
+		.signature_file
+		.as_ref()
+		.ok_or_else(|| VdError::MissingArgument {
+			argument_name: s!("signature file path"),
+		})?;
+	let signature = fs::File::open(sigfile).with_context(ctx!("opening signature file"))?;
+	let signed =
+		fs::File::open(&message.input_file).with_context(ctx!("opening input file for signature"))?;
+	let result = ctx.verify_detached(signature, signed)?;
+	Ok(interpret_verify_result(&result))
 }
 
-#[derive(StructOpt, Debug)]
-#[structopt(
-	name = "vd-verifier",
-	about = "Native app for use with vd browser extension",
-	rename_all = "kebab-case"
-)]
-struct ParsedMessage {
+fn find_only_hex_string(text: &str) -> Option<Vec<u8>> {
+	let re = regex::Regex::new(r"\b[[:xdigit:]]{32, 128}\b").expect("regex should be valid");
+	let captures: Vec<_> = re.captures_iter(text).collect();
+	if captures.len() == 1 {
+		let c = &captures[0];
+		return hex::decode(&c[0]).ok();
+	}
+	None
+}
+
+fn respond<S: Serialize>(result: &S) -> Result<(), Error> {
+	let response = serde_json::to_string(&result)?;
+	eprintln!("responding {}", serde_json::to_string_pretty(&result).unwrap());
+	respond_to_extension(&response, &mut io::stdout())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "kebab-case")]
+struct VdMessage {
 	/// File name as supplied by the server
-	#[structopt(short = "o", long)]
 	original_filename: Option<PathBuf>,
 
 	/// Absolute path to downloaded file
-	#[structopt(short = "i", long)]
 	input_file: PathBuf,
 
 	/// File containing digest
-	#[structopt(short = "d", long)]
 	digest_file: Option<PathBuf>,
 
 	/// Hex-encoded digest of input-file supplied directly
-	#[structopt(short = "h", long)]
-	digest_direct: Option<HexData>,
+	digest_direct: Option<String>,
 
 	/// File containing signed digest of input-file
-	#[structopt(short = "s", long)]
-	sig_file: Option<PathBuf>,
-
-	/// File containing signed digest of input-file
-	#[structopt(short = "c", long)]
-	cleanup: bool,
+	/// Digest-related and version fields are ignored if specified
+	signature_file: Option<PathBuf>,
 }
 
-impl ParsedMessage {
-	pub fn get_digest(&self) -> Result<Vec<u8>, Error> {
+impl VdMessage {
+	pub fn get_digest(&self) -> Result<Option<Vec<u8>>, Error> {
 		if let Some(digest) = &self.digest_direct {
-			return Ok(digest.0.clone());
+			let digest = Vec::from_hex(&digest).with_context(ctx!("parsing provided digest"))?;
+			return Ok(Some(digest));
 		}
 		let path = self
 			.digest_file
 			.as_ref()
-			.ok_or_else(|| VdError::NoneError(s!("digest file path")))?;
-		let mut f = fs::File::open(&path)?;
+			.ok_or_else(|| VdError::MissingArgument {
+				argument_name: s!("digest file path"),
+			})?;
+		let mut f = fs::File::open(&path).with_context(ctx!("opening digest file"))?;
 		self.search_digest_file(&mut f)
 	}
 
-	fn search_digest_file<R: std::io::Read>(&self, file: &mut R) -> Result<Vec<u8>, Error> {
+	fn search_digest_file<R: std::io::Read>(&self, file: &mut R) -> Result<Option<Vec<u8>>, Error> {
 		let mut contents = String::new();
-		file.read_to_string(&mut contents)?;
+		file.read_to_string(&mut contents)
+			.with_context(ctx!("reading contents of digest file"))?;
 		let orig_filename = self
 			.original_filename
 			.as_ref()
-			.ok_or_else(|| VdError::NoneError(s!("original filename")))?;
+			.ok_or_else(|| VdError::MissingArgument {
+				argument_name: s!("original filename"),
+			})?;
 		for line in contents.lines() {
-			let result = self.search_line(line, orig_filename);
-			if result.is_ok() {
-				return result;
+			let result = self.search_line(line, orig_filename)?;
+			if result.is_some() {
+				return Ok(result);
 			};
 		}
-		if let Some(digest) = find_first_hex_string(&contents) {
-			return Ok(digest);
+		if let Some(digest) = find_only_hex_string(&contents) {
+			return Ok(Some(digest));
 		}
-		Err(VdError::NoneError(s!("digest not present in file")))?
+		Ok(None)
 	}
 
-	fn search_line(&self, line: &str, orig_filename: &Path) -> Result<Vec<u8>, Error> {
+	fn search_line(&self, line: &str, orig_filename: &Path) -> Result<Option<Vec<u8>>, Error> {
 		let tokens: Vec<&str> = line.split_whitespace().collect();
 		if tokens.len() < 2 {
-			return Err(VdError::NoneError(s!("")))?;
+			return Ok(None);
 		}
 		let digest = tokens[0];
 		let filename = tokens[1].trim_matches('*'); // * is possible filename prefix in *sums files
-		if p!(filename).file_name().unwrap() == orig_filename {
-			let decoded = hex::decode(digest)?;
-			return Ok(decoded);
+		if let Some(read_filename) = p!(filename).file_name() {
+			if read_filename
+				== orig_filename
+					.file_name()
+					.expect("orig filename should contain filename")
+			{
+				let decoded = hex::decode(digest)?;
+				return Ok(Some(decoded));
+			}
 		}
-		Err(VdError::NoneError(s!("")))?
+		Ok(None)
 	}
-}
-
-fn respond_error(e: &Error) -> Result<(), Error> {
-	// {{ -> { in rust format string
-	let response = format!(r#"{{"error": "{}"}}"#, e);
-	respond_to_extension(&response, &mut io::stdout())
-}
-
-fn respond_result(result: &str) -> Result<(), Error> {
-	let response = format!(r#"{{"result": "{}"}}"#, result);
-	respond_to_extension(&response, &mut io::stdout())
 }
 
 fn main() -> Result<(), Error> {
-	match process_incoming_message() {
-		Ok(result) => respond_result(&result),
-		Err(e) => respond_error(&e),
+	let message = read_message(&mut io::stdin())?;
+	let version_request: Result<VersionRequest, serde_json::error::Error> = serde_json::from_str(&message);
+	if version_request.is_ok() {
+		let response = ResponseVersion::default();
+		return respond(&response);
 	}
+	let message: VdMessage = serde_json::from_str(&message)?;
+	let mut response = Response::default();
+	if message.signature_file.is_some() {
+		response.signatures = verify_signature(&message).map_err(|e| e.to_string());
+	} else {
+		response.integrity = verify_digest(&message).map_err(|e| e.to_string());
+	}
+	respond(&response)
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
 	use super::*;
+	use serde_json::json;
 
 	#[test]
-	fn parsed_message_accepts_path_with_spaces() {
-		const S: [&str; 5] = ["vd", "-i", "/path/to/renamed spaced.f", "-h", "DEADBEEF"];
+	fn get_digest_returns_digest_if_valid_hexstr() {
+		let obj: serde_json::value::Value = json!({
+			"input-file": "/path/to/renamed spaced.f",
+			"digest-direct": "DEADBEEF"
+		});
+		let p: VdMessage = serde_json::from_str(&obj.to_string()).unwrap();
 
-		let p = ParsedMessage::from_iter_safe(&S).unwrap();
-		assert_eq!(p.input_file, Path::new("/path/to/renamed spaced.f"));
+		assert_eq!(p.get_digest().unwrap().unwrap(), vec![0xDE, 0xAD, 0xBE, 0xEF]);
 	}
 
 	#[test]
-	fn get_digest_returns_data_if_digest_specified_directly() {
-		const S: [&str; 5] = ["vd", "-i", "/path/to/renamed.f", "-h", "DEADBEEF"];
-
-		let p = ParsedMessage::from_iter_safe(&S).unwrap();
-		assert_eq!(p.get_digest().unwrap(), vec! {0xDE, 0xAD, 0xBE, 0xEF});
-	}
-
-	#[test]
-	fn get_digest_returns_error_if_message_has_no_digest() {
-		const S: [&str; 5] = ["vd", "-o", "orig_name", "-i", "/path/to/renamed.f"];
+	fn get_digest_rejects_digest_if_invalid_hexstr() {
+		let obj: serde_json::value::Value = json!({
+			"input-file": "/path/to/renamed spaced.f",
+			"digest-direct": "DEADBEET"
+		});
+		let p: VdMessage = serde_json::from_str(&obj.to_string()).unwrap();
 
 		assert_eq!(
-			format!(
-				"{}",
-				ParsedMessage::from_iter_safe(&S)
-					.unwrap()
-					.get_digest()
-					.unwrap_err()
-			),
-			"missing required data: digest file path"
+			p.get_digest().unwrap_err().to_string(),
+			"Invalid character 'T' at position 7 while parsing provided digest"
+		);
+	}
+
+	#[test]
+	fn get_digest_returns_error_if_message_has_no_digest_field() {
+		let obj: serde_json::value::Value = json!({
+			"input-file": "/path/to/renamed spaced.f",
+		});
+		let p: VdMessage = serde_json::from_str(&obj.to_string()).unwrap();
+
+		assert_eq!(
+			p.get_digest().unwrap_err().to_string(),
+			"Missing required argument: digest file path"
 		);
 	}
 
 	#[test]
 	fn search_file_returns_error_if_digest_passed_in_file_and_no_original_filename() {
-		const S: [&str; 5] = ["vd", "-i", "/path/to/renamed.f", "-d", "/path/to/digest"];
+		let obj: serde_json::value::Value = json!({
+			"input-file": "/path/to/renamed spaced.f",
+		});
+		let p: VdMessage = serde_json::from_str(&obj.to_string()).unwrap();
 		let mut file: &[u8] = b"DEADBEEF *./file";
 
 		assert_eq!(
-			format!(
-				"{}",
-				ParsedMessage::from_iter_safe(&S)
-					.unwrap()
-					.search_digest_file(&mut file)
-					.unwrap_err()
-			),
-			"missing required data: original filename"
+			p.search_digest_file(&mut file).unwrap_err().to_string(),
+			"Missing required argument: original filename"
 		);
 	}
 
 	#[test]
-	fn search_file_returns_error_if_digest_file_does_not_contain_digests() {
-		const S: [&str; 7] = [
-			"vd",
-			"-o",
-			"orig_name",
-			"-i",
-			"/path/to/renamed.f",
-			"-d",
-			"/path/to/digest",
-		];
-		let mut file: &[u8] = b"not_hexdata *./file";
+	fn search_file_returns_digest_if_passed_correct_digest_file_and_original_filename() {
+		let obj: serde_json::value::Value = json!({
+			"input-file": "/path/to/renamed spaced.f",
+			"original-filename": "/path/to/file",
+		});
+		let p: VdMessage = serde_json::from_str(&obj.to_string()).unwrap();
+		let mut file: &[u8] = b"DEADBEEF *./file";
 
 		assert_eq!(
-			format!(
-				"{}",
-				ParsedMessage::from_iter_safe(&S)
-					.unwrap()
-					.search_digest_file(&mut file)
-					.unwrap_err()
-			),
-			"missing required data: digest not present in file"
+			p.search_digest_file(&mut file).unwrap().unwrap(),
+			vec![0xDE, 0xAD, 0xBE, 0xEF]
 		);
 	}
 
 	#[test]
-	fn find_first_hex_string_returns_first_hex_string() {
+	fn search_digest_file_returns_none_if_digest_file_does_not_contain_digests() {
+		let obj: serde_json::value::Value = json!({
+			"input-file": "/path/to/renamed spaced.f",
+			"original-filename": "orig_name",
+			"digest-file": "/path/to/digest"
+		});
+		let p: VdMessage = serde_json::from_str(&obj.to_string()).unwrap();
+		let mut file: &[u8] = b"not_hexdata *./file";
+
+		assert_eq!(p.search_digest_file(&mut file).unwrap(), None);
+	}
+
+	#[test]
+	fn find_only_hex_string_returns_hex_string_if_only_one_acceptable() {
 		let text = "sha256 78a2284b43f6eae40f6f495eedb727eca845c4a3bfcd9d8c122ab3ac78ecfb71";
 
-		let hexdata = find_first_hex_string(text);
-		assert_eq!(hexdata.is_some(), true);
+		let hexdata = find_only_hex_string(text);
+		assert!(hexdata.is_some());
 		assert_eq!(
 			hexdata.unwrap(),
 			Vec::from_hex("78a2284b43f6eae40f6f495eedb727eca845c4a3bfcd9d8c122ab3ac78ecfb71").unwrap()
@@ -352,8 +326,8 @@ mod tests {
 	fn find_first_hex_string_returns_none_if_no_digest_present() {
 		let text = "md5wannabe 78a2284b43f6eae40f6f495e"; // too short
 
-		let hexdata = find_first_hex_string(text);
-		assert_eq!(hexdata.is_none(), true);
+		let hexdata = find_only_hex_string(text);
+		assert!(hexdata.is_none());
 	}
 
 	#[test]
@@ -371,52 +345,32 @@ mod tests {
 
 	#[test]
 	fn search_line_accepts_shasums_format() {
-		const S: [&str; 5] = ["vd", "-i", "/path/to/renamed.f", "-h", "DEADBEEF"];
+		let obj: serde_json::value::Value = json!({
+			"input-file": "/path/to/renamed spaced.f",
+		});
+		let p: VdMessage = serde_json::from_str(&obj.to_string()).unwrap();
 
-		let p = ParsedMessage::from_iter_safe(&S).unwrap();
 		assert_eq!(
 			p.search_line("DEADBEEE *processed.file", p!("processed.file"))
+				.unwrap()
 				.unwrap(),
-			vec! {0xDE, 0xAD, 0xBE, 0xEE}
+			vec![0xDE, 0xAD, 0xBE, 0xEE]
 		);
 	}
 
 	#[test]
 	fn infer_digest_from_data_identifies_md5() {
 		assert_eq!(
-			infer_digest_from_data(&Vec::from_hex("5f4dcc3b5aa765d61d8327deb882cf99").unwrap()),
-			Some(DigestKind::Md5)
+			infer_digest_kind(&Vec::from_hex("5f4dcc3b5aa765d61d8327deb882cf99").unwrap()).unwrap(),
+			DigestKind::Md5
 		);
 	}
 
 	#[test]
 	fn infer_digest_from_data_does_not_support_crc() {
 		assert_eq!(
-			infer_digest_from_data(&Vec::from_hex("3054285985").unwrap()),
-			None
-		);
-	}
-
-	#[test]
-	fn json_to_options_returns_cmdline_like_options() {
-		assert_eq!(
-			json_to_opt_vec(
-				r#"{
-									"original-filename": "orig_name",
-			                        "input-file": "/path/to/renamed.f",
-									"digest-file": "/path/to/digest"
-			                        }"#
-			)
-			.unwrap(),
-			[
-				"vd",
-				"--digest-file",
-				"/path/to/digest",
-				"--input-file",
-				"/path/to/renamed.f",
-				"--original-filename",
-				"orig_name",
-			]
+			infer_digest_kind(&Vec::from_hex("3054285985").unwrap()).unwrap_err(),
+			VdError::InvalidDigestLength { digest_length: 5 }
 		);
 	}
 
@@ -424,23 +378,26 @@ mod tests {
 	fn read_json_accepts_4_bytes_len_len_bytes_msg() {
 		let mut j: &[u8] = &[0x05, 0x00, 0x00, 0x00, b'{', b'a', b':', b'b', b'}'];
 
-		assert_eq!(read_json_message(&mut j).unwrap(), "{a:b}")
+		assert_eq!(read_message(&mut j).unwrap(), "{a:b}")
 	}
 
 	#[test]
-	#[should_panic]
 	fn read_json_rejects_unexpected_eof() {
 		let mut j: &[u8] = &[0xFF, 0x00, 0x00, 0x00, b'{', b'a', b':', b'b', b'}'];
-
-		read_json_message(&mut j).unwrap();
+		assert_eq!(
+			read_message(&mut j).unwrap_err().to_string(),
+			"failed to fill whole buffer while reading message from extension"
+		);
 	}
 
 	#[test]
-	#[should_panic]
 	fn read_json_rejects_negative_input_size() {
 		let mut j: &[u8] = &[0x00, 0x00, 0x00, 0xFF, b'{', b'a', b':', b'b', b'}'];
 
-		read_json_message(&mut j).unwrap();
+		assert_eq!(
+			read_message(&mut j).unwrap_err().to_string(),
+			"Invalid parameter: message length"
+		);
 	}
 
 	#[test]
