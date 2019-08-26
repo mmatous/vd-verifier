@@ -68,13 +68,6 @@ pub enum VdError {
 	MissingContent { file_type: String, missing_data: String },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum DigestKind {
-	Sha1,
-	Sha256,
-	Sha512,
-}
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum IntegritySummary {

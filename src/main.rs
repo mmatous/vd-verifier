@@ -5,38 +5,41 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use failure::{Error, ResultExt};
 use gpgme::{Context, Protocol, VerificationResult};
 use hex::FromHex;
+use ring::digest;
 use serde::{Deserialize, Serialize};
-use sha1::{Digest, Sha1};
-use sha2::{Sha256, Sha512};
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
 mod vdv;
 use crate::vdv::*;
 
-fn infer_digest_kind(digest: &[u8]) -> Result<DigestKind, VdError> {
+fn infer_digest_kind(digest: &[u8]) -> Result<&'static digest::Algorithm, VdError> {
 	let digest_length = digest.len();
 	match digest_length {
-		20 => Ok(DigestKind::Sha1),   // 160/8
-		32 => Ok(DigestKind::Sha256), // 256/8
-		64 => Ok(DigestKind::Sha512), // 512/8
+		digest::SHA1_OUTPUT_LEN => Ok(&digest::SHA1_FOR_LEGACY_USE_ONLY),
+		digest::SHA256_OUTPUT_LEN => Ok(&digest::SHA256),
+		digest::SHA512_OUTPUT_LEN => Ok(&digest::SHA512),
 		_ => Err(VdError::InvalidDigestLength { digest_length })?,
 	}
 }
 
-fn digest_input<R: std::io::Read>(input: &mut R, digest_kind: DigestKind) -> Result<Vec<u8>, Error> {
-	match digest_kind {
-		DigestKind::Sha1 => calculate::<Sha1, R>(input),
-		DigestKind::Sha256 => calculate::<Sha256, R>(input),
-		DigestKind::Sha512 => calculate::<Sha512, R>(input),
-	}
+fn digest_input<R: std::io::Read>(
+	input: &mut R,
+	algorithm: &'static digest::Algorithm,
+) -> Result<Vec<u8>, Error> {
+	calculate(algorithm, input)
 }
 
-fn calculate<D: Digest + std::io::Write, R: std::io::Read>(input: &mut R) -> Result<Vec<u8>, Error> {
-	let mut hasher = D::new();
-	let _n = io::copy(input, &mut hasher)?;
-	let hash = hasher.result();
-	Ok(hash.to_vec())
+fn calculate<R: std::io::Read>(d: &'static digest::Algorithm, input: &mut R) -> Result<Vec<u8>, Error> {
+	let mut ctx = digest::Context::new(d);
+	let mut buf = [0_u8; 8 * 1024];
+	while let Ok(read_len) = input.read(&mut buf) {
+		if read_len == 0 {
+			break;
+		}
+		ctx.update(&buf[..read_len]);
+	}
+	Ok(ctx.finish().as_ref().to_vec())
 }
 
 fn respond_to_extension<W: std::io::Write>(response: &str, writer: &mut W) -> Result<(), Error> {
@@ -331,7 +334,7 @@ mod test {
 	fn digest_input_can_calculate_sha512() {
 		let mut i: &[u8] = b"content to sha512\n";
 		assert_eq!(
-			digest_input(&mut i, DigestKind::Sha512).unwrap(),
+			digest_input(&mut i, &digest::SHA512).unwrap(),
 			Vec::from_hex(
 				"d43cb55cf99c1d726c9cf3cd4933171010db15afddff2f9cf612f3af2904b624dcb2ce\
 				 7c3531b3193069d6bae487ed152b9d389b24b973d4f7460a95ed14e8e7"
@@ -359,7 +362,7 @@ mod test {
 	fn infer_digest_from_data_identifies_sha1() {
 		assert_eq!(
 			infer_digest_kind(&Vec::from_hex("5f4dcc3b5aa765d61d8327deb882cf99432aab3f").unwrap()).unwrap(),
-			DigestKind::Sha1
+			&ring::digest::SHA1_FOR_LEGACY_USE_ONLY
 		);
 	}
 
