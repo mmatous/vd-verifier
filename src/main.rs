@@ -23,14 +23,7 @@ fn infer_digest_kind(digest: &[u8]) -> Result<&'static digest::Algorithm, VdErro
 	}
 }
 
-fn digest_input<R: std::io::Read>(
-	input: &mut R,
-	algorithm: &'static digest::Algorithm,
-) -> Result<Vec<u8>, Error> {
-	calculate(algorithm, input)
-}
-
-fn calculate<R: std::io::Read>(d: &'static digest::Algorithm, input: &mut R) -> Result<Vec<u8>, Error> {
+fn digest_input<R: std::io::Read>(input: &mut R, d: &'static digest::Algorithm) -> Result<Vec<u8>, Error> {
 	let mut ctx = digest::Context::new(d);
 	let mut buf = [0_u8; 8 * 1024];
 	while let Ok(read_len) = input.read(&mut buf) {
