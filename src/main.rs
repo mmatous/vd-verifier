@@ -5,9 +5,8 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use failure::{Error, ResultExt};
 use gpgme::{Context, Protocol, VerificationResult};
 use hex::FromHex;
-use md5::{Digest, Md5};
 use serde::{Deserialize, Serialize};
-use sha1::Sha1;
+use sha1::{Digest, Sha1};
 use sha2::{Sha256, Sha512};
 use std::path::{Path, PathBuf};
 use std::{fs, io};
@@ -18,7 +17,6 @@ use crate::vdv::*;
 fn infer_digest_kind(digest: &[u8]) -> Result<DigestKind, VdError> {
 	let digest_length = digest.len();
 	match digest_length {
-		16 => Ok(DigestKind::Md5),    // 128/8
 		20 => Ok(DigestKind::Sha1),   // 160/8
 		32 => Ok(DigestKind::Sha256), // 256/8
 		64 => Ok(DigestKind::Sha512), // 512/8
@@ -28,7 +26,6 @@ fn infer_digest_kind(digest: &[u8]) -> Result<DigestKind, VdError> {
 
 fn digest_input<R: std::io::Read>(input: &mut R, digest_kind: DigestKind) -> Result<Vec<u8>, Error> {
 	match digest_kind {
-		DigestKind::Md5 => calculate::<Md5, R>(input),
 		DigestKind::Sha1 => calculate::<Sha1, R>(input),
 		DigestKind::Sha256 => calculate::<Sha256, R>(input),
 		DigestKind::Sha512 => calculate::<Sha512, R>(input),
@@ -113,7 +110,7 @@ fn verify_signature(message: &VdMessage) -> Result<Vec<String>, Error> {
 }
 
 fn find_only_hex_string(text: &str) -> Option<Vec<u8>> {
-	let re = regex::Regex::new(r"\b[[:xdigit:]]{32, 128}\b").expect("regex should be valid");
+	let re = regex::Regex::new(r"\b[[:xdigit:]]{40, 128}\b").expect("regex should be valid");
 	let captures: Vec<_> = re.captures_iter(text).collect();
 	if captures.len() == 1 {
 		let c = &captures[0];
@@ -359,10 +356,10 @@ mod test {
 	}
 
 	#[test]
-	fn infer_digest_from_data_identifies_md5() {
+	fn infer_digest_from_data_identifies_sha1() {
 		assert_eq!(
-			infer_digest_kind(&Vec::from_hex("5f4dcc3b5aa765d61d8327deb882cf99").unwrap()).unwrap(),
-			DigestKind::Md5
+			infer_digest_kind(&Vec::from_hex("5f4dcc3b5aa765d61d8327deb882cf99432aab3f").unwrap()).unwrap(),
+			DigestKind::Sha1
 		);
 	}
 

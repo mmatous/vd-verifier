@@ -70,7 +70,6 @@ pub enum VdError {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DigestKind {
-	Md5,
 	Sha1,
 	Sha256,
 	Sha512,
