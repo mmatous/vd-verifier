@@ -2,14 +2,12 @@ language: rust
 rust:
   - stable
 
-dist: bionic
-
 matrix:
   fast_finish: true
 
 addons:
   apt:
-    packages: libgpgme-dev
+    packages: libgpgme11-dev
 
 before_script:
   - rustup component add clippy
