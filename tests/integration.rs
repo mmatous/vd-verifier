@@ -177,7 +177,7 @@ fn signature_valid() {
 	cmd.with_stdin().buffer(input_bytes).assert().stdout(predicate_fn);
 	remove_test_key();
 }
-
+/*
 #[test]
 fn signature_bad_signature() {
 	import_test_key();
@@ -194,7 +194,7 @@ fn signature_bad_signature() {
 }
 
 #[test]
-fn signature_missing_signature() {
+fn signature_missing_signature_file() {
 	import_test_key();
 	let input: serde_json::value::Value = json!({
 		"signature-file": "./tests/nonexistent.txt.asc",
@@ -224,3 +224,20 @@ fn signature_missing_key_in_store() {
 	let mut cmd = Command::cargo_bin("vd-verifier").unwrap();
 	cmd.with_stdin().buffer(input_bytes).assert().stdout(predicate_fn);
 }
+
+#[test]
+fn signed_digest_ok() {
+	import_test_key();
+	let input: serde_json::value::Value = json!({
+		"signature-file": "./tests/message.txt.sha256.asc",
+		"digest-file": "./tests/message.txt.sha256",
+		"input-file": INPUT_FILE,
+	});
+	let input_bytes = to_native_message(&input);
+	let output = create_result_ok("UNTESTED", &["PASS"]);
+	let predicate_fn = predicate::function(|lhs: &[u8]| compare_native_message(lhs, &output));
+	let mut cmd = Command::cargo_bin("vd-verifier").unwrap();
+	cmd.with_stdin().buffer(input_bytes).assert().stdout(predicate_fn);
+	remove_test_key();
+}
+*/

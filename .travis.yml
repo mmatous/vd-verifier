@@ -7,14 +7,14 @@ matrix:
 
 addons:
   apt:
-    packages: libgpgme11-dev
+    packages: [ nettle-dev, libgmp-dev ]
 
 before_script:
   - rustup component add clippy
 
 script:
   - cargo build --verbose
-  - cargo clippy --all-targets --all-features -- -D warnings
+  - cargo clippy --all-targets -- -D warnings
   - cargo test --verbose -- --test-threads=1
 
 cache:
