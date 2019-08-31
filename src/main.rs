@@ -7,6 +7,7 @@ use gpgme::{Context, Protocol, VerificationResult};
 use hex::FromHex;
 use ring::digest;
 use serde::{Deserialize, Serialize};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
@@ -90,17 +91,10 @@ fn interpret_verify_result(result: &VerificationResult) -> Vec<String> {
 	res
 }
 
-fn verify_signature(message: &VdMessage) -> Result<Vec<String>, Error> {
+fn verify_signatures(input_file: &Path, signature_file: &Path) -> Result<Vec<String>, Error> {
 	let mut ctx = Context::from_protocol(Protocol::OpenPgp)?;
-	let sigfile = message
-		.signature_file
-		.as_ref()
-		.ok_or_else(|| VdError::MissingArgument {
-			argument_name: s!("signature file path"),
-		})?;
-	let signature = fs::File::open(sigfile).with_context(ctx!("opening signature file"))?;
-	let signed =
-		fs::File::open(&message.input_file).with_context(ctx!("opening input file for signature"))?;
+	let signature = fs::File::open(signature_file).with_context(ctx!("opening signature file"))?;
+	let signed = fs::File::open(&input_file).with_context(ctx!("opening input file for signature"))?;
 	let result = ctx.verify_detached(signature, signed)?;
 	Ok(interpret_verify_result(&result))
 }
@@ -162,12 +156,7 @@ impl VdMessage {
 		let mut contents = String::new();
 		file.read_to_string(&mut contents)
 			.with_context(ctx!("reading contents of digest file"))?;
-		let orig_filename = self
-			.original_filename
-			.as_ref()
-			.ok_or_else(|| VdError::MissingArgument {
-				argument_name: s!("original filename"),
-			})?;
+		let orig_filename = self.get_original_filename()?;
 		for line in contents.lines() {
 			let result = self.search_line(line, orig_filename)?;
 			if result.is_some() {
@@ -180,7 +169,7 @@ impl VdMessage {
 		Ok(None)
 	}
 
-	fn search_line(&self, line: &str, orig_filename: &Path) -> Result<Option<Vec<u8>>, Error> {
+	fn search_line(&self, line: &str, orig_filename: &OsStr) -> Result<Option<Vec<u8>>, Error> {
 		let tokens: Vec<&str> = line.split_whitespace().collect();
 		if tokens.len() < 2 {
 			return Ok(None);
@@ -188,16 +177,22 @@ impl VdMessage {
 		let digest = tokens[0];
 		let filename = tokens[1].trim_matches('*'); // * is possible filename prefix in *sums files
 		if let Some(read_filename) = p!(filename).file_name() {
-			if read_filename
-				== orig_filename
-					.file_name()
-					.expect("orig filename should contain filename")
-			{
+			if read_filename == orig_filename {
 				let decoded = hex::decode(digest)?;
 				return Ok(Some(decoded));
 			}
 		}
 		Ok(None)
+	}
+
+	fn get_original_filename(&self) -> Result<&OsStr, Error> {
+		if self.original_filename.is_some() {
+			return Ok(OsStr::new(self.original_filename.as_ref().expect("fname exists")));
+		}
+		Ok(self.input_file.file_name().ok_or(VdError::MissingContent {
+			file_type: s!("Input filename"),
+			missing_data: s!("actual filename"),
+		})?)
 	}
 }
 
@@ -211,7 +206,14 @@ fn main() -> Result<(), Error> {
 	let message: VdMessage = serde_json::from_str(&message)?;
 	let mut response = Response::default();
 	if message.signature_file.is_some() {
-		response.signatures = verify_signature(&message).map_err(|e| e.to_string());
+		let signature_file = message
+			.signature_file
+			.as_ref()
+			.ok_or_else(|| VdError::MissingArgument {
+				argument_name: s!("signature file path"),
+			})?;
+		response.signatures =
+			verify_signatures(&message.input_file, &signature_file).map_err(|e| e.to_string());
 	} else {
 		response.integrity = verify_digest(&message).map_err(|e| e.to_string());
 	}
@@ -262,24 +264,10 @@ mod test {
 	}
 
 	#[test]
-	fn search_file_returns_error_if_digest_passed_in_file_and_no_original_filename() {
-		let obj: serde_json::value::Value = json!({
-			"input-file": "/path/to/renamed spaced.f",
-		});
-		let p: VdMessage = serde_json::from_str(&obj.to_string()).unwrap();
-		let mut file: &[u8] = b"DEADBEEF *./file";
-
-		assert_eq!(
-			p.search_digest_file(&mut file).unwrap_err().to_string(),
-			"Missing required argument: original filename"
-		);
-	}
-
-	#[test]
 	fn search_file_returns_digest_if_passed_correct_digest_file_and_original_filename() {
 		let obj: serde_json::value::Value = json!({
 			"input-file": "/path/to/renamed spaced.f",
-			"original-filename": "/path/to/file",
+			"original-filename": "file",
 		});
 		let p: VdMessage = serde_json::from_str(&obj.to_string()).unwrap();
 		let mut file: &[u8] = b"DEADBEEF *./file";
@@ -344,7 +332,7 @@ mod test {
 		let p: VdMessage = serde_json::from_str(&obj.to_string()).unwrap();
 
 		assert_eq!(
-			p.search_line("DEADBEEE *processed.file", p!("processed.file"))
+			p.search_line("DEADBEEE *processed.file", &OsStr::new("processed.file"))
 				.unwrap()
 				.unwrap(),
 			vec![0xDE, 0xAD, 0xBE, 0xEE]
@@ -400,6 +388,25 @@ mod test {
 
 		respond_to_extension(r#"{a:1}"#, &mut w).unwrap();
 		assert_eq!(w, j);
+	}
+
+	#[test]
+	fn get_original_filename_returns_original_filename() {
+		let obj: serde_json::value::Value = json!({
+				"input-file": "/path/to/renamed file.f",
+				"original-filename": "orig.f"
+		});
+		let p: VdMessage = serde_json::from_str(&obj.to_string()).unwrap();
+		assert_eq!(p.get_original_filename().unwrap(), "orig.f");
+	}
+
+	#[test]
+	fn get_original_filename_falls_back_to_input_filename() {
+		let obj: serde_json::value::Value = json!({
+				"input-file": "/path/to/orig.f",
+		});
+		let p: VdMessage = serde_json::from_str(&obj.to_string()).unwrap();
+		assert_eq!(p.get_original_filename().unwrap(), "orig.f");
 	}
 
 }
