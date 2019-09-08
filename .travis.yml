@@ -1,20 +1,37 @@
 language: rust
+
+sudo: required
+
 rust:
   - stable
+  - beta
+  - nightly
 
 matrix:
+  allow_failures:
+    - rust: nightly
   fast_finish: true
 
 addons:
   apt:
-    packages: libgpgme11-dev
+    packages:
+     - libgpgme11-dev
+     - libcurl4-openssl-dev
+     - libelf-dev
+     - libdw-dev
+     - cmake
+     - gcc
+     - binutils-dev
+     - libiberty-dev
 
 before_script:
-  - rustup component add clippy
+  - if [[ "$TRAVIS_RUST_VERSION" == "stable" ]]; then rustup component add clippy; fi
+  - if [[ "$TRAVIS_RUST_VERSION" == "stable" ]]; then rustup component add rustfmt; fi
+
 
 script:
-  - cargo build --verbose
-  - cargo clippy --all-targets --all-features -- -D warnings
+  - if [[ "$TRAVIS_RUST_VERSION" == "stable" ]]; then cargo clippy --all-targets --all-features -- -D warnings; fi
+  - if [[ "$TRAVIS_RUST_VERSION" == "stable" ]]; then cargo fmt -- --check; fi
   - cargo test --verbose -- --test-threads=1
 
 cache:
@@ -22,3 +39,18 @@ cache:
 
 git:
   depth: 1
+
+after_success: |
+  wget https://github.com/SimonKagstrom/kcov/archive/master.tar.gz &&
+  tar xzf master.tar.gz &&
+  cd kcov-master &&
+  mkdir build &&
+  cd build &&
+  cmake .. &&
+  make &&
+  make install DESTDIR=../../kcov-build &&
+  cd ../.. &&
+  rm -rf kcov-master &&
+  for file in target/debug/vd-verifier-*; do [ -x "${file}" ] || continue; mkdir -p "target/cov/$(basename $file)"; ./kcov-build/usr/local/bin/kcov --exclude-pattern=/.cargo,/usr/lib --verify "target/cov/$(basename $file)" "$file"; done &&
+  bash <(curl -s https://codecov.io/bash) &&
+  echo "Uploaded code coverage"

@@ -20,7 +20,7 @@ fn infer_digest_kind(digest: &[u8]) -> Result<&'static digest::Algorithm, VdErro
 		digest::SHA1_OUTPUT_LEN => Ok(&digest::SHA1_FOR_LEGACY_USE_ONLY),
 		digest::SHA256_OUTPUT_LEN => Ok(&digest::SHA256),
 		digest::SHA512_OUTPUT_LEN => Ok(&digest::SHA512),
-		_ => Err(VdError::InvalidDigestLength { digest_length })?,
+		_ => Err(VdError::InvalidDigestLength { digest_length }),
 	}
 }
 
@@ -213,7 +213,7 @@ fn main() -> Result<(), Error> {
 				argument_name: s!("signature file path"),
 			})?;
 		response.signatures =
-			verify_signatures(&message.input_file, &signature_file).map_err(|e| e.to_string());
+			verify_signatures(&message.input_file, signature_file).map_err(|e| e.to_string());
 	} else {
 		response.integrity = verify_digest(&message).map_err(|e| e.to_string());
 	}
@@ -332,7 +332,7 @@ mod test {
 		let p: VdMessage = serde_json::from_str(&obj.to_string()).unwrap();
 
 		assert_eq!(
-			p.search_line("DEADBEEE *processed.file", &OsStr::new("processed.file"))
+			p.search_line("DEADBEEE *processed.file", OsStr::new("processed.file"))
 				.unwrap()
 				.unwrap(),
 			vec![0xDE, 0xAD, 0xBE, 0xEE]
