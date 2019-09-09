@@ -57,8 +57,6 @@ impl Default for ResponseVersion {
 pub enum VdError {
 	#[fail(display = "Missing required argument: {}", argument_name)]
 	MissingArgument { argument_name: String },
-	#[fail(display = "Invalid parameter: {}", param_name)]
-	InvalidParam { param_name: String },
 	#[fail(display = "Invalid digest length: {} bytes", digest_length)]
 	InvalidDigestLength { digest_length: usize },
 	#[fail(

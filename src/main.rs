@@ -7,6 +7,7 @@ use gpgme::{Context, Protocol, VerificationResult};
 use hex::FromHex;
 use ring::digest;
 use serde::{Deserialize, Serialize};
+use std::convert::TryFrom;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
@@ -37,20 +38,14 @@ fn digest_input<R: std::io::Read>(input: &mut R, d: &'static digest::Algorithm) 
 }
 
 fn respond_to_extension<W: std::io::Write>(response: &str, writer: &mut W) -> Result<(), Error> {
-	writer.write_i32::<LittleEndian>(response.as_bytes().len() as i32)?;
+	writer.write_i32::<LittleEndian>(i32::try_from(response.as_bytes().len())?)?;
 	writer.write_all(response.as_bytes())?;
 	Ok(())
 }
 
 fn read_message<R: std::io::Read>(reader: &mut R) -> Result<String, Error> {
 	let message_length = reader.read_i32::<LittleEndian>()?;
-	ensure!(
-		message_length >= 1,
-		VdError::InvalidParam {
-			param_name: s!("message length")
-		}
-	);
-	let mut buffer = vec![0_u8; message_length as usize];
+	let mut buffer = vec![0_u8; usize::try_from(message_length).with_context(ctx!("parsing input"))?];
 	reader
 		.read_exact(buffer.as_mut_slice())
 		.with_context(ctx!("reading message from extension"))?;
@@ -377,7 +372,7 @@ mod test {
 
 		assert_eq!(
 			read_message(&mut j).unwrap_err().to_string(),
-			"Invalid parameter: message length"
+			"out of range integral type conversion attempted while parsing input"
 		);
 	}
 
