@@ -3,6 +3,7 @@ extern crate failure;
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use failure::{Error, ResultExt};
+#[cfg(not(target_os = "windows"))]
 use gpgme::{Context, Protocol, VerificationResult};
 use hex::FromHex;
 use ring::digest;
@@ -69,10 +70,11 @@ fn verify_digest(message: &VdMessage) -> Result<IntegritySummary, Error> {
 		None => Err(VdError::MissingContent {
 			file_type: s!("Digest file"),
 			missing_data: s!("corresponding digest"),
-		})?,
+		}.into()),
 	}
 }
 
+#[cfg(not(target_os = "windows"))]
 fn interpret_verify_result(result: &VerificationResult) -> Vec<String> {
 	eprintln!("{:?}", result);
 	let mut res = Vec::new();
@@ -87,11 +89,17 @@ fn interpret_verify_result(result: &VerificationResult) -> Vec<String> {
 }
 
 fn verify_signatures(input_file: &Path, signature_file: &Path) -> Result<Vec<String>, Error> {
-	let mut ctx = Context::from_protocol(Protocol::OpenPgp)?;
-	let signature = fs::File::open(signature_file).with_context(ctx!("opening signature file"))?;
-	let signed = fs::File::open(&input_file).with_context(ctx!("opening input file for signature"))?;
-	let result = ctx.verify_detached(signature, signed)?;
-	Ok(interpret_verify_result(&result))
+	#[cfg(target_os = "windows")] {
+		eprintln!("Unable to verify {} and {} on Windows", input_file.display(), signature_file.display());
+		return Err(VdError::_Unsupported.into());
+	}
+	#[cfg(not(target_os = "windows"))] { // if cfg! not working for some reason
+		let mut ctx = Context::from_protocol(Protocol::OpenPgp)?;
+		let signature = fs::File::open(signature_file).with_context(ctx!("opening signature file"))?;
+		let signed = fs::File::open(&input_file).with_context(ctx!("opening input file for signature"))?;
+		let result = ctx.verify_detached(signature, signed)?;
+		return Ok(interpret_verify_result(&result));
+	}
 }
 
 fn find_only_hex_string(text: &str) -> Option<Vec<u8>> {

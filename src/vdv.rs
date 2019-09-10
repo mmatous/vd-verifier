@@ -64,6 +64,8 @@ pub enum VdError {
 		file_type, missing_data
 	)]
 	MissingContent { file_type: String, missing_data: String },
+	#[fail(display = "Operation is currently unsupported on your OS")]
+	_Unsupported,
 }
 
 #[derive(Debug, PartialEq, Serialize)]
