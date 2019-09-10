@@ -66,7 +66,7 @@ pub enum VdError {
 	MissingContent { file_type: String, missing_data: String },
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum IntegritySummary {
 	Pass,
@@ -79,4 +79,12 @@ pub enum IntegritySummary {
 #[serde(rename_all = "kebab-case")]
 pub struct VersionRequest {
 	version_request: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "kebab-case")]
+pub enum SignedDataKind {
+	Data,
+	Digest,
 }

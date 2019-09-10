@@ -129,6 +129,10 @@ struct VdMessage {
 	/// File containing signed digest of input-file
 	/// Digest-related and version fields are ignored if specified
 	signature_file: Option<PathBuf>,
+
+	/// Specify whether digest_file or 'input_file' should be used as a message
+	/// for signature verification
+	signed_data: Option<SignedDataKind>,
 }
 
 impl VdMessage {
@@ -189,6 +193,20 @@ impl VdMessage {
 			missing_data: s!("actual filename"),
 		})?)
 	}
+
+	fn get_signature_file(&self) -> Result<&PathBuf, VdError> {
+		self.signature_file
+			.as_ref()
+			.ok_or_else(|| VdError::MissingArgument {
+				argument_name: s!("signature file path"),
+			})
+	}
+
+	fn get_digest_file(&self) -> Result<&PathBuf, VdError> {
+		self.digest_file.as_ref().ok_or_else(|| VdError::MissingArgument {
+			argument_name: s!("digest file path"),
+		})
+	}
 }
 
 fn main() -> Result<(), Error> {
@@ -200,17 +218,22 @@ fn main() -> Result<(), Error> {
 	}
 	let message: VdMessage = serde_json::from_str(&message)?;
 	let mut response = Response::default();
-	if message.signature_file.is_some() {
-		let signature_file = message
-			.signature_file
-			.as_ref()
-			.ok_or_else(|| VdError::MissingArgument {
-				argument_name: s!("signature file path"),
-			})?;
-		response.signatures =
-			verify_signatures(&message.input_file, signature_file).map_err(|e| e.to_string());
-	} else {
-		response.integrity = verify_digest(&message).map_err(|e| e.to_string());
+	match message.signed_data {
+		Some(SignedDataKind::Data) => {
+			response.signatures = verify_signatures(&message.input_file, &message.get_signature_file()?)
+				.map_err(|e| e.to_string());
+		}
+		Some(SignedDataKind::Digest) => {
+			response.integrity = verify_digest(&message).map_err(|e| e.to_string());
+			if response.integrity == Ok(IntegritySummary::Pass) {
+				response.signatures =
+					verify_signatures(&message.get_digest_file()?, &message.get_signature_file()?)
+						.map_err(|e| e.to_string());
+			}
+		}
+		None => {
+			response.integrity = verify_digest(&message).map_err(|e| e.to_string());
+		}
 	}
 	respond(&response)
 }
