@@ -6,8 +6,8 @@ use failure::{Error, ResultExt};
 #[cfg(not(target_os = "windows"))]
 use gpgme::{Context, Protocol, VerificationResult};
 use hex::FromHex;
-use ring::digest;
 use serde::{Deserialize, Serialize};
+use sha2::digest::{Digest, DynDigest};
 use std::convert::TryFrom;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -15,27 +15,28 @@ use std::{fs, io};
 
 mod vdv;
 use crate::vdv::*;
+use sha1::Sha1;
+use sha2::{Sha256, Sha512};
 
-fn infer_digest_kind(digest: &[u8]) -> Result<&'static digest::Algorithm, VdError> {
+fn infer_digest_kind(digest: &[u8]) -> Result<Box<dyn DynDigest>, VdError> {
 	let digest_length = digest.len();
 	match digest_length {
-		digest::SHA1_OUTPUT_LEN => Ok(&digest::SHA1_FOR_LEGACY_USE_ONLY),
-		digest::SHA256_OUTPUT_LEN => Ok(&digest::SHA256),
-		digest::SHA512_OUTPUT_LEN => Ok(&digest::SHA512),
+		20 => Ok(Box::new(Sha1::new())),
+		32 => Ok(Box::new(Sha256::new())),
+		64 => Ok(Box::new(Sha512::new())),
 		_ => Err(VdError::InvalidDigestLength { digest_length }),
 	}
 }
 
-fn digest_input<R: std::io::Read>(input: &mut R, d: &'static digest::Algorithm) -> Result<Vec<u8>, Error> {
-	let mut ctx = digest::Context::new(d);
+fn digest_input<R: std::io::Read>(input: &mut R, mut hasher: Box<dyn DynDigest>) -> Result<Vec<u8>, Error> {
 	let mut buf = [0_u8; 8 * 1024];
 	while let Ok(read_len) = input.read(&mut buf) {
 		if read_len == 0 {
 			break;
 		}
-		ctx.update(&buf[..read_len]);
+		hasher.input(&buf[..read_len]);
 	}
-	Ok(ctx.finish().as_ref().to_vec())
+	Ok(hasher.result().to_vec())
 }
 
 fn respond_to_extension<W: std::io::Write>(response: &str, writer: &mut W) -> Result<(), Error> {
@@ -70,7 +71,8 @@ fn verify_digest(message: &VdMessage) -> Result<IntegritySummary, Error> {
 		None => Err(VdError::MissingContent {
 			file_type: s!("Digest file"),
 			missing_data: s!("corresponding digest"),
-		}.into()),
+		}
+		.into()),
 	}
 }
 
@@ -89,16 +91,23 @@ fn interpret_verify_result(result: &VerificationResult) -> Vec<String> {
 }
 
 fn verify_signatures(input_file: &Path, signature_file: &Path) -> Result<Vec<String>, Error> {
-	#[cfg(target_os = "windows")] {
-		eprintln!("Unable to verify {} and {} on Windows", input_file.display(), signature_file.display());
+	#[cfg(target_os = "windows")]
+	{
+		eprintln!(
+			"Unable to verify {} and {} on Windows",
+			input_file.display(),
+			signature_file.display()
+		);
 		return Err(VdError::_Unsupported.into());
 	}
-	#[cfg(not(target_os = "windows"))] { // if cfg! not working for some reason
+	#[cfg(not(target_os = "windows"))]
+	{
+		// if cfg! not working for some reason
 		let mut ctx = Context::from_protocol(Protocol::OpenPgp)?;
 		let signature = fs::File::open(signature_file).with_context(ctx!("opening signature file"))?;
 		let signed = fs::File::open(&input_file).with_context(ctx!("opening input file for signature"))?;
 		let result = ctx.verify_detached(signature, signed)?;
-		return Ok(interpret_verify_result(&result));
+		Ok(interpret_verify_result(&result))
 	}
 }
 
@@ -228,14 +237,14 @@ fn main() -> Result<(), Error> {
 	let mut response = Response::default();
 	match message.signed_data {
 		Some(SignedDataKind::Data) => {
-			response.signatures = verify_signatures(&message.input_file, &message.get_signature_file()?)
+			response.signatures = verify_signatures(&message.input_file, message.get_signature_file()?)
 				.map_err(|e| e.to_string());
 		}
 		Some(SignedDataKind::Digest) => {
 			response.integrity = verify_digest(&message).map_err(|e| e.to_string());
 			if response.integrity == Ok(IntegritySummary::Pass) {
 				response.signatures =
-					verify_signatures(&message.get_digest_file()?, &message.get_signature_file()?)
+					verify_signatures(message.get_digest_file()?, message.get_signature_file()?)
 						.map_err(|e| e.to_string());
 			}
 		}
@@ -341,7 +350,7 @@ mod test {
 	fn digest_input_can_calculate_sha512() {
 		let mut i: &[u8] = b"content to sha512\n";
 		assert_eq!(
-			digest_input(&mut i, &digest::SHA512).unwrap(),
+			digest_input(&mut i, Box::new(Sha512::new())).unwrap(),
 			Vec::from_hex(
 				"d43cb55cf99c1d726c9cf3cd4933171010db15afddff2f9cf612f3af2904b624dcb2ce\
 				 7c3531b3193069d6bae487ed152b9d389b24b973d4f7460a95ed14e8e7"
@@ -366,19 +375,8 @@ mod test {
 	}
 
 	#[test]
-	fn infer_digest_from_data_identifies_sha1() {
-		assert_eq!(
-			infer_digest_kind(&Vec::from_hex("5f4dcc3b5aa765d61d8327deb882cf99432aab3f").unwrap()).unwrap(),
-			&ring::digest::SHA1_FOR_LEGACY_USE_ONLY
-		);
-	}
-
-	#[test]
 	fn infer_digest_from_data_does_not_support_crc() {
-		assert_eq!(
-			infer_digest_kind(&Vec::from_hex("3054285985").unwrap()).unwrap_err(),
-			VdError::InvalidDigestLength { digest_length: 5 }
-		);
+		assert!(infer_digest_kind(&Vec::from_hex("3054285985").unwrap()).is_err());
 	}
 
 	#[test]
