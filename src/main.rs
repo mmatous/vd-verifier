@@ -102,7 +102,7 @@ fn verify_signatures(input_file: &Path, signature_file: &Path) -> Result<Vec<Str
 	}
 	#[cfg(not(target_os = "windows"))]
 	{
-		// if cfg! not working for some reason
+		// "if cfg! {}" not working for some reason
 		let mut ctx = Context::from_protocol(Protocol::OpenPgp)?;
 		let signature = fs::File::open(signature_file).with_context(ctx!("opening signature file"))?;
 		let signed = fs::File::open(&input_file).with_context(ctx!("opening input file for signature"))?;
@@ -239,6 +239,10 @@ fn main() -> Result<(), Error> {
 		Some(SignedDataKind::Data) => {
 			response.signatures = verify_signatures(&message.input_file, message.get_signature_file()?)
 				.map_err(|e| e.to_string());
+			if response.signatures.is_err() {
+				eprintln!("Signature verification failed, falling back to digest for at least some response");
+				response.integrity = verify_digest(&message).or(Ok(IntegritySummary::Untested));
+			}
 		}
 		Some(SignedDataKind::Digest) => {
 			response.integrity = verify_digest(&message).map_err(|e| e.to_string());

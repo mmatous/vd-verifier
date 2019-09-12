@@ -2,7 +2,7 @@
 
 [![GitHub](https://img.shields.io/github/license/mmatous/vd-verifier?color=blue&style=plastic)](LICENSE)
 [![Build Status](https://travis-ci.com/mmatous/vd-verifier.svg?branch=master)](https://travis-ci.com/mmatous/vd-verifier)
-[![codecov](https://codecov.io/gh/mmatous/vd-verifier/branch/master/graph/badge.svg)](https://codecov.io/gh/mmatous/vd)
+[![codecov](https://codecov.io/gh/mmatous/vd-verifier/branch/master/graph/badge.svg)](https://codecov.io/gh/mmatous/vd-verifier)
 
 Application that serves as the other half of [vd](https://github.com/mmatous/vd) browser extension.
 

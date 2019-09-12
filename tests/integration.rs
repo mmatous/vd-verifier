@@ -267,9 +267,9 @@ fn signed_single_digest_bad_digest() {
 fn signed_multiple_digests_file() {
 	import_test_key();
 	let input: serde_json::value::Value = json!({
-		"signature-file": "./tests/sha256sums.gpg",
-		"input-file": INPUT_FILE,
 		"digest-file": "./tests/sha256sums",
+		"input-file": INPUT_FILE,
+		"signature-file": "./tests/sha256sums.gpg",
 		"signed-data": "digest",
 	});
 	let input_bytes = to_native_message(&input);
@@ -280,3 +280,22 @@ fn signed_multiple_digests_file() {
 	remove_test_key();
 }
 
+#[test]
+fn signature_missing_signature_digest_fallback() {
+	import_test_key();
+	let input: serde_json::value::Value = json!({
+		"digest-file": "./tests/sha256sums",
+		"input-file": INPUT_FILE,
+		"signature-file": "./tests/nonexistent.txt.asc",
+		"signed-data": "data",
+	});
+	let input_bytes = to_native_message(&input);
+	let output = create_result_auth_err(
+		"PASS",
+		"No such file or directory (os error 2) while opening signature file",
+	);
+	let predicate_fn = predicate::function(|lhs: &[u8]| compare_native_message(lhs, &output));
+	let mut cmd = Command::cargo_bin("vd-verifier").unwrap();
+	cmd.with_stdin().buffer(input_bytes).assert().stdout(predicate_fn);
+	remove_test_key();
+}
