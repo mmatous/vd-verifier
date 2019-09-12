@@ -436,5 +436,4 @@ mod test {
 		let p: VdMessage = serde_json::from_str(&obj.to_string()).unwrap();
 		assert_eq!(p.get_original_filename().unwrap(), "orig.f");
 	}
-
 }
