@@ -186,12 +186,12 @@ impl VdMessage {
 	}
 
 	fn search_line(&self, line: &str, orig_filename: &OsStr) -> Result<Option<Vec<u8>>, Error> {
-		let tokens: Vec<&str> = line.split_whitespace().collect();
+		let tokens: Vec<&str> = line.splitn(2, char::is_whitespace).collect();
 		if tokens.len() < 2 {
 			return Ok(None);
 		}
-		let digest = tokens[0];
-		let filename = tokens[1].trim_matches('*'); // * is possible filename prefix in *sums files
+		let digest = tokens[0].trim();
+		let filename = tokens[1].trim().trim_matches('*'); // * is possible filename prefix in *sums files
 		if let Some(read_filename) = p!(filename).file_name() {
 			if read_filename == orig_filename {
 				let decoded = hex::decode(digest)?;
@@ -374,6 +374,24 @@ mod test {
 			p.search_line("DEADBEEE *processed.file", OsStr::new("processed.file"))
 				.unwrap()
 				.unwrap(),
+			vec![0xDE, 0xAD, 0xBE, 0xEE]
+		);
+	}
+
+	#[test]
+	fn search_line_handles_whitespaced_names() {
+		let obj: serde_json::value::Value = json!({
+			"input-file": "/path/to/renamed spaced.f",
+		});
+		let p: VdMessage = serde_json::from_str(&obj.to_string()).unwrap();
+
+		assert_eq!(
+			p.search_line(
+				"DEADBEEE *processed setup.file",
+				OsStr::new("processed setup.file")
+			)
+			.unwrap()
+			.unwrap(),
 			vec![0xDE, 0xAD, 0xBE, 0xEE]
 		);
 	}
