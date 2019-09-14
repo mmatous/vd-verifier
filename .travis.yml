@@ -20,7 +20,7 @@ addons:
      - curl
 
 before_install:
-  - if [[ "$TRAVIS_RUST_VERSION" == "nightly" ]]; then cargo install grcov
+  - if [[ "$TRAVIS_RUST_VERSION" == "nightly" ]]; then curl -L https://github.com/mozilla/grcov/releases/latest/download/grcov-linux-x86_64.tar.bz2 | tar jxf -; fi
 
 before_script:
   - if [[ ! "$TRAVIS_RUST_VERSION" == "nightly" ]]; then rustup component add clippy; fi
@@ -40,5 +40,5 @@ git:
 
 after_success: |
   zip -0 ccov.zip `find . \( -name "vd_verifier*.gc*" \) -print`;
-  grcov ccov.zip -s . -t lcov --llvm --branch --ignore-not-existing --ignore-dir "/*" -o lcov.info;
+  ./grcov ccov.zip -s . -t lcov --llvm --branch --ignore-not-existing --ignore-dir "/*" -o lcov.info;
   bash <(curl -s https://codecov.io/bash) -f lcov.info;
