@@ -17,6 +17,7 @@ addons:
     packages:
      - libgpgme11-dev
      - libgpg-error-dev
+     - curl
 
 before_install:
   - if [[ "$TRAVIS_RUST_VERSION" == "nightly" ]]; then curl -L https://github.com/mozilla/grcov/releases/latest/download/grcov-linux-x86_64.tar.bz2 | tar jxf -
