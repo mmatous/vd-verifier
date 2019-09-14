@@ -17,6 +17,9 @@ addons:
     packages:
      - libgpgme11-dev
 
+env:
+  - CARGO_INCREMENTAL=0 RUSTFLAGS="-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Zno-landing-pads"
+
 before_cache: |
   if [[ ! "$TRAVIS_RUST_VERSION" == "nightly" ]]; then
     cargo install grcov -f
@@ -29,8 +32,6 @@ before_script:
 
 
 script:
-  - if [[ ! "$TRAVIS_RUST_VERSION" == "nightly" ]]; then export CARGO_INCREMENTAL=0
-  - if [[ ! "$TRAVIS_RUST_VERSION" == "nightly" ]]; then export RUSTFLAGS="-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Zno-landing-pads"
   - if [[ ! "$TRAVIS_RUST_VERSION" == "nightly" ]]; then cargo clippy --all-targets --all-features -- -D warnings; fi
   - if [[ ! "$TRAVIS_RUST_VERSION" == "nightly" ]]; then cargo fmt --all -- --check; fi
   - cargo test --verbose -- --test-threads=1
