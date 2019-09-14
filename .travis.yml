@@ -3,11 +3,12 @@ language: rust
 rust:
   - stable
   - beta
+  - nightly
 
 matrix:
   include:
     - rust: nightly
-      env: CARGO_INCREMENTAL=0 RUSTFLAGS="-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Zno-landing-pads"
+      env: CARGO_FLAGS="--features nightly" CARGO_INCREMENTAL=0 RUSTFLAGS="-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Zno-landing-pads"
   allow_failures:
     - rust: nightly
   fast_finish: true
@@ -19,7 +20,7 @@ addons:
      - libgpg-error-dev
 
 before_cache: |
-  if [[ ! "$TRAVIS_RUST_VERSION" == "nightly" ]]; then
+  if [[ "$TRAVIS_RUST_VERSION" == "nightly" ]]; then
     cargo install grcov -f
   fi
 
