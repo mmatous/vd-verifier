@@ -7,7 +7,7 @@ rust:
 matrix:
   include:
     - rust: nightly
-      env: CARGO_FLAGS="--features nightly" CARGO_INCREMENTAL=0 RUSTFLAGS="-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Zno-landing-pads"
+#      env: CARGO_FLAGS="--features nightly" CARGO_INCREMENTAL=0 RUSTFLAGS="-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Zno-landing-pads"
   allow_failures:
     - rust: nightly
   fast_finish: true
@@ -19,8 +19,8 @@ addons:
      - libgpg-error-dev
      - curl
 
-before_install:
-  - if [[ "$TRAVIS_RUST_VERSION" == "nightly" ]]; then curl -L https://github.com/mozilla/grcov/releases/latest/download/grcov-linux-x86_64.tar.bz2 | tar jxf -; fi
+#before_install:
+#  - if [[ "$TRAVIS_RUST_VERSION" == "nightly" ]]; then curl -L https://github.com/mozilla/grcov/releases/latest/download/grcov-linux-x86_64.tar.bz2 | tar jxf -; fi
 
 before_script:
   - if [[ ! "$TRAVIS_RUST_VERSION" == "nightly" ]]; then rustup component add clippy; fi
@@ -38,7 +38,7 @@ cache:
 git:
   depth: 1
 
-after_success: |
-  zip -0 ccov.zip `find . \( -name "vd_verifier*.gc*" \) -print`;
-  ./grcov ccov.zip -s . -t lcov --llvm --branch --ignore-not-existing --ignore-dir "/*" -o lcov.info;
-  bash <(curl -s https://codecov.io/bash) -f lcov.info;
+#after_success: |
+#  zip -0 ccov.zip `find . \( -name "vd_verifier*.gc*" \) -print`;
+#  ./grcov ccov.zip -s . -t lcov --llvm --branch --ignore-not-existing --ignore-dir "/*" -o lcov.info;
+#  bash <(curl -s https://codecov.io/bash) -f lcov.info;
