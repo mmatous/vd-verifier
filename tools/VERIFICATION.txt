@@ -1,0 +1,2 @@
+﻿VERIFICATION
+Package maintained by author of the software.

@@ -1,0 +1,30 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!-- Read this before creating packages: https://chocolatey.org/docs/create-packages -->
+<!-- It is especially important to read the above link to understand additional requirements when publishing packages to the community feed aka dot org (https://chocolatey.org/packages). -->
+
+<!-- Test your packages in a test environment: https://github.com/chocolatey/chocolatey-test-environment -->
+
+<!-- Do not remove this test for UTF-8: if “Ω” doesn’t appear as greek uppercase omega letter enclosed in quotation marks, you should use an editor that supports UTF-8, not this one. -->
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>vd-verifier</id>
+    <version>0.3.0</version>
+    <packageSourceUrl>https://github.com/mmatous/vd-verifier</packageSourceUrl>
+
+    <title>vd-verifier</title>
+    <authors>Martin Matous</authors>
+    <projectUrl>https://github.com/mmatous/vd-verifier</projectUrl>
+    <copyright>2019 Martin Matous</copyright>
+    <licenseUrl>https://github.com/mmatous/vd-verifier/blob/master/LICENSE</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <projectSourceUrl>https://github.com/mmatous/vd-verifier</projectSourceUrl>
+    <bugTrackerUrl>https://github.com/mmatous/vd-verifier/issues</bugTrackerUrl>
+    <tags>vd-verifier browser extension download digest verification</tags>
+    <summary>Software to accompany the vd Firefox extension</summary>
+    <description>Software to accompany the vd Firefox extension</description>
+
+  </metadata>
+  <files>
+    <file src="tools/**" target="tools" />
+  </files>
+</package>
